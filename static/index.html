@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Напарник</title>
+<style>
+  :root {
+    --bg: #12141a; --card: #1b1e27; --card2: #222633;
+    --text: #e8eaf0; --muted: #8a90a3; --accent: #6c9bff;
+    --good: #4ecb8f; --bad: #ff7a6c; --radius: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.5 "Segoe UI", system-ui, sans-serif;
+    max-width: 860px; margin: 0 auto; padding: 24px 16px 60px;
+  }
+  h1 { font-size: 22px; display: flex; align-items: center; gap: 10px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); }
+  .dot.on { background: var(--good); box-shadow: 0 0 8px var(--good); }
+  .streak { margin-left: auto; font-size: 14px; color: var(--muted); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
+  .card { background: var(--card); border-radius: var(--radius); padding: 18px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+             color: var(--muted); margin-bottom: 12px; }
+  .wide { grid-column: 1 / -1; }
+
+  /* Напарник */
+  .buddy { display: flex; gap: 14px; align-items: flex-start; }
+  .face { font-size: 40px; line-height: 1; }
+  .bubble { background: var(--card2); border-radius: 12px; padding: 10px 14px; flex: 1; }
+  .bubble .meta { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .distraction { color: var(--bad); }
+
+  /* Статистика */
+  .bar-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: 14px; }
+  .bar-row .name { width: 90px; color: var(--muted); }
+  .bar { height: 10px; border-radius: 5px; background: var(--accent); min-width: 4px; }
+  .bar.dis { background: var(--bad); }
+  .bar-row .min { color: var(--muted); font-size: 13px; }
+
+  /* Формы */
+  input, button, select {
+    background: var(--card2); color: var(--text); border: 1px solid #2e3342;
+    border-radius: 8px; padding: 9px 12px; font: inherit;
+  }
+  input:focus { outline: 1px solid var(--accent); }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); border: none; color: #0d1020; font-weight: 600; }
+  button.danger { background: transparent; border-color: var(--bad); color: var(--bad); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .row input[type=text] { flex: 1; min-width: 160px; }
+
+  /* Лента */
+  .timeline { max-height: 260px; overflow-y: auto; font-size: 14px; }
+  .timeline div { padding: 4px 0; border-bottom: 1px solid #262b3a; }
+  .timeline .t { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
+
+  /* Чат */
+  .chat-log { max-height: 220px; overflow-y: auto; margin-bottom: 10px; }
+  .msg { margin: 6px 0; padding: 8px 12px; border-radius: 10px; max-width: 85%; }
+  .msg.me { background: var(--accent); color: #0d1020; margin-left: auto; }
+  .msg.ai { background: var(--card2); }
+  .report-text { white-space: pre-wrap; }
+  .focus-banner { background: linear-gradient(90deg, #2b3a63, #223); border-radius: 10px;
+                  padding: 10px 14px; margin-top: 10px; display: none; }
+  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <h1><span class="dot" id="dot"></span> Напарник
+    <span class="streak" id="streak"></span>
+    <button id="toggleWatch" style="margin-left:12px"></button>
+  </h1>
+
+  <div class="grid">
+    <div class="card wide">
+      <div class="buddy">
+        <div class="face" id="face">🙂</div>
+        <div class="bubble">
+          <div id="say">Привет! Я смотрю на экран раз в пару минут и веду учёт времени. Поставь фокус-цель — буду следить, чтобы ты не уплыл в тикток.</div>
+          <div class="meta" id="obsMeta"></div>
+        </div>
+      </div>
+      <div class="focus-banner" id="focusBanner"></div>
+    </div>
+
+    <div class="card">
+      <h2>Фокус-сессия</h2>
+      <div class="row">
+        <input type="text" id="goal" placeholder="например: дописать курсовую">
+        <select id="minutes">
+          <option value="25">25 мин</option>
+          <option value="45">45 мин</option>
+          <option value="60" selected>60 мин</option>
+          <option value="90">90 мин</option>
+        </select>
+        <button class="primary" onclick="startFocus()">Старт</button>
+        <button class="danger" onclick="stopFocus()">Стоп</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Сегодня</h2>
+      <div id="bars"><span style="color:var(--muted)">пока нет данных…</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Лента дня</h2>
+      <div class="timeline" id="timeline"></div>
+    </div>
+
+    <div class="card">
+      <h2>Вечерний отчёт</h2>
+      <button onclick="evening()">Подвести итоги дня</button>
+      <p class="report-text" id="report" style="margin-top:10px"></p>
+    </div>
+
+    <div class="card wide">
+      <h2>Чат с Напарником</h2>
+      <div class="chat-log" id="chatLog"></div>
+      <div class="row">
+        <input type="text" id="chatInput" placeholder="спроси что-нибудь…"
+               onkeydown="if(event.key==='Enter')sendChat()">
+        <button class="primary" onclick="sendChat()">➤</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+let history = [];
+let watching = true;
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  return r.json();
+}
+
+async function refreshStatus() {
+  const s = await api('/api/status');
+  watching = s.watching;
+  $('dot').className = 'dot' + (s.watching ? ' on' : '');
+  $('toggleWatch').textContent = s.watching ? '⏸ пауза' : '▶ смотреть';
+  $('streak').textContent = s.streak > 0 ? `🔥 серия: ${s.streak} дн.` : '';
+
+  if (s.last_obs) {
+    const o = s.last_obs;
+    $('face').textContent = o.is_distraction ? '🤨' : '😊';
+    $('obsMeta').innerHTML =
+      `${s.last_ts} — вижу: <b class="${o.is_distraction ? 'distraction' : ''}">` +
+      `${o.category}</b> · ${o.description} (${o.app})`;
+    if (s.last_remark && o.is_distraction) $('say').textContent = s.last_remark;
+  }
+  const fb = $('focusBanner');
+  if (s.focus) {
+    fb.style.display = 'block';
+    fb.textContent = `🎯 Фокус: «${s.focus.goal}» до ${s.focus.ends_ts.slice(11, 16)}`;
+  } else fb.style.display = 'none';
+}
+
+async function refreshToday() {
+  const t = await api('/api/today');
+  if (!t.timeline.length) return;
+  const max = Math.max(...Object.values(t.by_category_min), 1);
+  $('bars').innerHTML = Object.entries(t.by_category_min).map(([cat, min]) =>
+    `<div class="bar-row"><span class="name">${cat}</span>` +
+    `<div class="bar ${['видео','игры','соцсети'].includes(cat) ? 'dis' : ''}"` +
+    ` style="width:${Math.round(min / max * 100) * 0.7}%"></div>` +
+    `<span class="min">${min} мин</span></div>`).join('') +
+    `<div class="bar-row" style="margin-top:8px"><span class="name">отвлечения</span>` +
+    `<span class="min">${t.distraction_min} мин (${Math.round(t.distraction_share * 100)}%)</span></div>`;
+  $('timeline').innerHTML = t.timeline.slice().reverse().map(e =>
+    `<div><span class="t">${e.time}</span>${e.is_distraction ? '⚠' : '✓'} ` +
+    `${e.category} — ${e.description}</div>`).join('');
+}
+
+async function startFocus() {
+  const goal = $('goal').value.trim();
+  if (!goal) return alert('Напиши цель!');
+  await api('/api/focus', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                           body: JSON.stringify({goal, minutes: +$('minutes').value})});
+  $('say').textContent = `Принято: «${goal}». Слежу! 👀`;
+  refreshStatus();
+}
+
+async function stopFocus() {
+  await api('/api/focus', {method: 'DELETE'});
+  $('say').textContent = 'Фокус снят. Отдыхай, заслужил.';
+  refreshStatus();
+}
+
+$('toggleWatch').onclick = async () => {
+  await api('/api/watch', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                           body: JSON.stringify({on: !watching})});
+  refreshStatus();
+};
+
+async function evening() {
+  $('report').textContent = 'Напарник думает…';
+  const r = await api('/api/evening');
+  $('report').textContent = r.text;
+}
+
+async function sendChat() {
+  const text = $('chatInput').value.trim();
+  if (!text) return;
+  $('chatInput').value = '';
+  addMsg(text, 'me');
+  const r = await api('/api/chat', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                    body: JSON.stringify({message: text, history})});
+  addMsg(r.reply, 'ai');
+  history.push({user: text, companion: r.reply});
+  history = history.slice(-10);
+}
+
+function addMsg(text, who) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + who;
+  div.textContent = text;
+  $('chatLog').appendChild(div);
+  $('chatLog').scrollTop = 1e9;
+}
+
+refreshStatus(); refreshToday();
+setInterval(refreshStatus, 10000);
+setInterval(refreshToday, 60000);
+</script>
+</body>
+</html>

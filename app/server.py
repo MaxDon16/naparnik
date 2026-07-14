@@ -20,7 +20,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from . import companion, config, db, reporter, tray, watcher
+from . import companion, config, db, quiz, reporter, tray, watcher
 
 app = FastAPI(title="Напарник")
 
@@ -80,9 +80,30 @@ def _quiz_loop() -> None:
                             cwd=config.PROJECT_DIR)
 
 
+OVERLAY = {"proc": None}
+
+
+def _overlay_running() -> bool:
+    return OVERLAY["proc"] is not None and OVERLAY["proc"].poll() is None
+
+
+def _overlay_start() -> None:
+    if not _overlay_running():
+        OVERLAY["proc"] = subprocess.Popen(
+            [sys.executable, "-m", "app.overlay"], cwd=config.PROJECT_DIR)
+
+
+def _overlay_stop() -> None:
+    if _overlay_running():
+        OVERLAY["proc"].terminate()
+    OVERLAY["proc"] = None
+
+
 threading.Thread(target=_watch_loop, daemon=True).start()
 threading.Thread(target=_quiz_loop, daemon=True).start()
 tray.start(STATE)
+if db.get_setting(db.connect(), "overlay_enabled") != "0":
+    _overlay_start()
 
 
 # --- API ---
@@ -183,7 +204,23 @@ def quiz_info():
         "questions": [dict(q) for q in conn.execute(
             "SELECT * FROM questions ORDER BY wrong DESC, id").fetchall()],
         "week_stats": {r["result"]: r["n"] for r in attempts},
+        "packs": quiz.list_packs(),
+        "overlay": _overlay_running(),
     }
+
+
+@app.post("/api/quiz/packs/{pack_id}/import")
+def import_pack(pack_id: str):
+    added = quiz.import_pack(db.connect(), pack_id)
+    return {"ok": True, "added": added}
+
+
+@app.post("/api/overlay")
+def toggle_overlay(req: WatchRequest):
+    conn = db.connect()
+    db.set_setting(conn, "overlay_enabled", "1" if req.on else "0")
+    _overlay_start() if req.on else _overlay_stop()
+    return {"overlay": _overlay_running()}
 
 
 @app.post("/api/quiz/settings")

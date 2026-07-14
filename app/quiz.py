@@ -9,14 +9,48 @@
 эквивалентен ли ответ по смыслу (формулу можно записать по-разному:
 «c2=a2+b2» и «сумма квадратов катетов» — одно и то же).
 """
+import json
 import random
 import re
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 
 import requests
 
 from . import config, db
+
+PACKS_DIR = Path(__file__).parent / "packs"
+
+
+def list_packs() -> list[dict]:
+    """Готовые наборы вопросов из app/packs/*.json."""
+    packs = []
+    for f in sorted(PACKS_DIR.glob("*.json")):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            packs.append({"id": data["id"], "name": data["name"],
+                          "count": len(data["questions"])})
+        except Exception:
+            continue        # битый файл набора не должен ломать всё
+    return packs
+
+
+def import_pack(conn: sqlite3.Connection, pack_id: str) -> int:
+    """Добавляет вопросы набора, пропуская уже существующие. Возвращает число новых."""
+    if not re.fullmatch(r"[\w-]+", pack_id):        # защита от ../../ в пути
+        raise ValueError("bad pack id")
+    path = PACKS_DIR / f"{pack_id}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    existing = {row["question"] for row in conn.execute("SELECT question FROM questions")}
+    added = 0
+    for item in data["questions"]:
+        if item["q"] not in existing:
+            conn.execute("INSERT INTO questions (question, answer) VALUES (?, ?)",
+                         (item["q"], item["a"]))
+            added += 1
+    conn.commit()
+    return added
 
 
 def pick_question(conn: sqlite3.Connection) -> sqlite3.Row | None:

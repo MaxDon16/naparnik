@@ -138,6 +138,14 @@
         <input type="text" id="newA" placeholder="ответ" style="max-width:220px">
         <button onclick="addQuestion()">＋ Добавить</button>
       </div>
+      <div class="row" style="margin-top:10px; align-items:center">
+        <span style="color:var(--muted); font-size:13px">Готовые наборы:</span>
+        <select id="packSelect"></select>
+        <button onclick="importPack()">📚 Добавить набор</button>
+        <label style="margin-left:auto; color:var(--muted); font-size:13px">
+          <input type="checkbox" id="overlayOn" onchange="toggleOverlay()"> иконка поверх окон
+        </label>
+      </div>
     </div>
 
     <div class="card wide">
@@ -217,6 +225,9 @@ async function refreshQuiz() {
     `За неделю: верно ${st.correct || 0} · неверно ${st.wrong || 0} · ` +
     `подсмотрено ${st.peeked || 0} (пароль по умолчанию: 1234 — смени его!)` +
     (q.next_quiz_ts ? ` | вопрос в ~${q.next_quiz_ts}` : '');
+  $('packSelect').innerHTML = (q.packs || []).map(p =>
+    `<option value="${p.id}">${esc(p.name)} — ${p.count} вопр.</option>`).join('');
+  $('overlayOn').checked = !!q.overlay;
   $('quizList').innerHTML = q.questions.map(x =>
     `<div><b>${esc(x.question)}</b> → ${esc(x.answer)}` +
     ` <span style="opacity:.6">(верно ${x.correct}, ошибок ${x.wrong})</span>` +
@@ -247,6 +258,19 @@ async function addQuestion() {
 async function delQuestion(id) {
   await api('/api/quiz/questions/' + id, {method: 'DELETE'});
   refreshQuiz();
+}
+
+async function importPack() {
+  const id = $('packSelect').value;
+  if (!id) return;
+  const r = await api('/api/quiz/packs/' + id + '/import', {method: 'POST'});
+  alert('Добавлено новых вопросов: ' + r.added);
+  refreshQuiz();
+}
+
+async function toggleOverlay() {
+  await api('/api/overlay', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({on: $('overlayOn').checked})});
 }
 
 async function startFocus() {

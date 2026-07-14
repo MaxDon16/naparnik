@@ -37,21 +37,31 @@ class LockScreen:
             # без рамки → нет крестика, Alt+F4 не работает
             self.root.overrideredirect(True)
             self.root.protocol("WM_DELETE_WINDOW", lambda: None)
-            self._keep_on_top()
 
         if autoclose:
             self.root.after(autoclose * 1000, self.root.destroy)
 
         self._build_ui()
         self._next_question()
+        if not demo:
+            # запускаем сторожа ПОСЛЕ построения UI, чтобы он мог
+            # возвращать фокус именно полю ввода
+            self.root.after(700, self._keep_on_top)
 
     def _keep_on_top(self):
-        """Каждые 700 мс возвращаем окно наверх и забираем фокус."""
+        """Каждые 700 мс возвращаем окно наверх.
+
+        Важно: фокус забираем только если он УШЁЛ из нашего окна.
+        Иначе focus_force() каждые 0.7 с выбивал курсор из поля ввода,
+        и приходилось кликать по нему перед каждым символом.
+        """
         try:
             self.root.attributes("-topmost", True)
             self.root.lift()
-            self.root.focus_force()
-        except tk.TclError:
+            if self.root.focus_get() is None:      # фокус у другого приложения
+                self.root.focus_force()
+                self.entry.focus_set()
+        except (tk.TclError, KeyError):
             return
         self.root.after(700, self._keep_on_top)
 

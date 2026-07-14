@@ -67,6 +67,7 @@ DEFAULT_SETTINGS = {
     "quiz_min": "30",
     "quiz_max": "60",
     "quiz_password_hash": "03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4",
+    "overlay_enabled": "1",
 }
 
 

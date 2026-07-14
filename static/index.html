@@ -118,6 +118,29 @@
     </div>
 
     <div class="card wide">
+      <h2>Тренировка памяти (родительский контроль)</h2>
+      <div class="row" style="align-items:center">
+        <label><input type="checkbox" id="quizEnabled"> включена</label>
+        <select id="quizMode">
+          <option value="fixed">каждые N минут</option>
+          <option value="random">случайно из диапазона</option>
+        </select>
+        <input type="number" id="quizMin" min="1" style="width:70px" title="мин, минут"> –
+        <input type="number" id="quizMax" min="1" style="width:70px" title="макс, минут"> мин
+        <input type="password" id="quizPw" placeholder="новый пароль родителя" style="width:180px">
+        <button class="primary" onclick="saveQuiz()">Сохранить</button>
+        <button onclick="api('/api/quiz/launch',{method:'POST'})">Проверить сейчас</button>
+      </div>
+      <p style="color:var(--muted);font-size:13px;margin-top:8px" id="quizStats"></p>
+      <div class="timeline" id="quizList" style="margin-top:8px"></div>
+      <div class="row" style="margin-top:10px">
+        <input type="text" id="newQ" placeholder="новый вопрос (например: формула Виета для x²+px+q=0)">
+        <input type="text" id="newA" placeholder="ответ" style="max-width:220px">
+        <button onclick="addQuestion()">＋ Добавить</button>
+      </div>
+    </div>
+
+    <div class="card wide">
       <h2>Чат с Напарником</h2>
       <div class="chat-log" id="chatLog"></div>
       <div class="row">
@@ -148,10 +171,16 @@ async function refreshStatus() {
   if (s.last_obs) {
     const o = s.last_obs;
     $('face').textContent = o.is_distraction ? '🤨' : '😊';
+    const badges = (o.is_game ? ' 🎮' : '') + (o.media ? ' 📺' + o.media : '');
     $('obsMeta').innerHTML =
       `${s.last_ts} — вижу: <b class="${o.is_distraction ? 'distraction' : ''}">` +
-      `${o.category}</b> · ${o.description} (${o.app})`;
+      `${o.category}${badges}</b> · ${o.description} (${o.app})` +
+      (o.apps ? ` <span style="opacity:.6">| открыто: ${o.apps}</span>` : '');
     if (s.last_remark && o.is_distraction) $('say').textContent = s.last_remark;
+  }
+  if (s.next_quiz_ts) {
+    $('quizStats').textContent = ($('quizStats').textContent.split(' | вопрос в ')[0]) +
+      ' | вопрос в ~' + s.next_quiz_ts;
   }
   const fb = $('focusBanner');
   if (s.focus) {
@@ -173,7 +202,51 @@ async function refreshToday() {
     `<span class="min">${t.distraction_min} мин (${Math.round(t.distraction_share * 100)}%)</span></div>`;
   $('timeline').innerHTML = t.timeline.slice().reverse().map(e =>
     `<div><span class="t">${e.time}</span>${e.is_distraction ? '⚠' : '✓'} ` +
-    `${e.category} — ${e.description}</div>`).join('');
+    `${e.category}${e.is_game ? ' 🎮' : ''}${e.media ? ' 📺' : ''} — ${e.description}</div>`).join('');
+}
+
+// --- Тренировка памяти ---
+async function refreshQuiz() {
+  const q = await api('/api/quiz');
+  $('quizEnabled').checked = q.enabled;
+  $('quizMode').value = q.mode;
+  $('quizMin').value = q.min_minutes;
+  $('quizMax').value = q.max_minutes;
+  const st = q.week_stats || {};
+  $('quizStats').textContent =
+    `За неделю: верно ${st.correct || 0} · неверно ${st.wrong || 0} · ` +
+    `подсмотрено ${st.peeked || 0} (пароль по умолчанию: 1234 — смени его!)` +
+    (q.next_quiz_ts ? ` | вопрос в ~${q.next_quiz_ts}` : '');
+  $('quizList').innerHTML = q.questions.map(x =>
+    `<div><b>${esc(x.question)}</b> → ${esc(x.answer)}` +
+    ` <span style="opacity:.6">(верно ${x.correct}, ошибок ${x.wrong})</span>` +
+    ` <a href="#" style="color:var(--bad)" onclick="delQuestion(${x.id});return false">✕</a></div>`
+  ).join('') || '<span style="color:var(--muted)">вопросов нет — добавь первый!</span>';
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+async function saveQuiz() {
+  await api('/api/quiz/settings', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      enabled: $('quizEnabled').checked, mode: $('quizMode').value,
+      min_minutes: +$('quizMin').value || 30, max_minutes: +$('quizMax').value || 60,
+      new_password: $('quizPw').value || null })});
+  $('quizPw').value = '';
+  refreshQuiz();
+}
+
+async function addQuestion() {
+  if (!$('newQ').value.trim() || !$('newA').value.trim()) return;
+  await api('/api/quiz/questions', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({question: $('newQ').value, answer: $('newA').value})});
+  $('newQ').value = ''; $('newA').value = '';
+  refreshQuiz();
+}
+
+async function delQuestion(id) {
+  await api('/api/quiz/questions/' + id, {method: 'DELETE'});
+  refreshQuiz();
 }
 
 async function startFocus() {
@@ -223,9 +296,10 @@ function addMsg(text, who) {
   $('chatLog').scrollTop = 1e9;
 }
 
-refreshStatus(); refreshToday();
+refreshStatus(); refreshToday(); refreshQuiz();
 setInterval(refreshStatus, 10000);
 setInterval(refreshToday, 60000);
+setInterval(refreshQuiz, 60000);
 </script>
 </body>
 </html>

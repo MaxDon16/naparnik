@@ -3,3 +3,4 @@ pillow
 requests
 fastapi
 uvicorn
+pystray

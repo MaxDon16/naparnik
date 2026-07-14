@@ -37,12 +37,15 @@ def day_summary(conn, day: date | None = None) -> dict:
         if row["is_distraction"]:
             distraction_sec += weight
 
+        keys = row.keys()
         timeline.append({
             "time": ts.strftime("%H:%M"),
             "category": row["category"],
             "description": row["description"],
             "app": row["app"],
             "is_distraction": bool(row["is_distraction"]),
+            "is_game": bool(row["is_game"]) if "is_game" in keys else False,
+            "media": row["media"] if "media" in keys else "",
         })
 
     return {

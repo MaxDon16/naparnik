@@ -13,20 +13,29 @@ import requests
 from . import config
 
 SYSTEM_PROMPT = f"""Ты — анализатор активности за компьютером.
-Тебе дают скриншот экрана. Определи, чем занят человек, и верни СТРОГО JSON без пояснений:
+Тебе дают скриншот экрана. Внимательно рассмотри его и верни СТРОГО JSON без пояснений:
 
 {{
-  "app": "название программы/сайта на переднем плане",
+  "app": "конкретное название программы/сайта на переднем плане (например: VS Code, YouTube, Dota 2, Telegram)",
+  "apps_open": ["другие видимые окна/вкладки, до 5 штук"],
   "category": "одна из: {', '.join(config.CATEGORIES)}",
-  "description": "что конкретно делает человек, 5-10 слов, по-русски",
+  "description": "детально, 7-15 слов: ЧТО ИМЕННО делает человек",
+  "is_game": true/false,
+  "media_platform": "youtube | tiktok | vk | twitch | kinopoisk | другая | нет",
   "is_distraction": true/false,
   "confidence": 0.0-1.0
 }}
 
 Правила:
 - category — РОВНО одно слово из списка, ничего другого.
+- Будь максимально конкретен: если это игра — назови игру ("играет в Minecraft, строит дом");
+  если видео — платформу и тему ролика ("смотрит на YouTube обзор видеокарты");
+  если код — язык и над чем работает ("пишет Python, модуль работы с базой данных");
+  если сайт — назови сайт. Названия бери из заголовков окон и вкладок, если они видны.
+- is_game = true только если на экране сама игра (не магазин игр, не видео об игре).
+- media_platform — только если человек СМОТРИТ видео/ленту, иначе "нет".
 - is_distraction = true для развлечений (видео, игры, соцсети, ленты). Работа, учёба, код, документы — false.
-- confidence — насколько ты уверен в определении (размытый/пустой экран = низкая уверенность).
+- confidence — насколько ты уверен (размытый/пустой экран = низкая уверенность).
 - Не пересказывай личное содержимое переписок и документов, только тип занятия."""
 
 
@@ -111,10 +120,18 @@ def _parse_answer(text: str) -> dict:
     if category not in config.CATEGORIES:
         category = "другое"
 
+    apps_open = data.get("apps_open", [])
+    if not isinstance(apps_open, list):
+        apps_open = []
+    media = str(data.get("media_platform", "нет")).strip().lower()
+
     return {
         "app": str(data.get("app", ""))[:100],
+        "apps": ", ".join(str(a)[:40] for a in apps_open[:5]),
         "category": category,
         "description": str(data.get("description", ""))[:200],
+        "is_game": bool(data.get("is_game", False)),
+        "media": "" if media in ("нет", "none", "") else media[:30],
         "is_distraction": bool(data.get("is_distraction", False)),
         "confidence": max(0.0, min(1.0, float(data.get("confidence", 0.5)))),
     }

@@ -7,16 +7,20 @@
 
 Запуск:  uvicorn app.server:app --port 8010
 """
+import hashlib
+import random
+import subprocess
+import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from . import companion, config, db, reporter, watcher
+from . import companion, config, db, reporter, tray, watcher
 
 app = FastAPI(title="Напарник")
 
@@ -25,6 +29,7 @@ STATE = {
     "last_obs": None,          # последнее наблюдение (dict)
     "last_remark": None,       # последняя реплика Напарника
     "last_ts": None,
+    "next_quiz_ts": None,      # когда всплывёт следующий вопрос
 }
 
 
@@ -43,7 +48,41 @@ def _watch_loop() -> None:
         time.sleep(config.INTERVAL_SEC)
 
 
+def _quiz_loop() -> None:
+    """Фоновый поток экрана-замка: ждёт свой интервал и запускает вопрос.
+
+    Экран открывается ОТДЕЛЬНЫМ процессом: у tkinter будет свой главный
+    поток, а падение окна не заденет сервер.
+    """
+    conn = db.connect()
+    while True:
+        if db.get_setting(conn, "quiz_enabled") != "1":
+            STATE["next_quiz_ts"] = None
+            time.sleep(10)
+            continue
+
+        lo = max(1, int(db.get_setting(conn, "quiz_min") or 30))
+        hi = max(lo, int(db.get_setting(conn, "quiz_max") or 60))
+        mode = db.get_setting(conn, "quiz_mode")
+        delay = lo * 60 if mode == "fixed" else random.randint(lo * 60, hi * 60)
+        STATE["next_quiz_ts"] = (datetime.now() + timedelta(seconds=delay)).strftime("%H:%M")
+
+        # спим мелкими шагами, чтобы выключение сработало сразу
+        deadline = time.time() + delay
+        cancelled = False
+        while time.time() < deadline:
+            time.sleep(5)
+            if db.get_setting(conn, "quiz_enabled") != "1":
+                cancelled = True
+                break
+        if not cancelled:
+            subprocess.call([sys.executable, "-m", "app.lockscreen"],
+                            cwd=config.PROJECT_DIR)
+
+
 threading.Thread(target=_watch_loop, daemon=True).start()
+threading.Thread(target=_quiz_loop, daemon=True).start()
+tray.start(STATE)
 
 
 # --- API ---
@@ -62,6 +101,19 @@ class WatchRequest(BaseModel):
     on: bool
 
 
+class QuizSettings(BaseModel):
+    enabled: bool
+    mode: str = "fixed"            # fixed | random
+    min_minutes: int = 30
+    max_minutes: int = 60
+    new_password: str | None = None
+
+
+class QuestionRequest(BaseModel):
+    question: str
+    answer: str
+
+
 @app.get("/api/status")
 def status():
     conn = db.connect()
@@ -74,6 +126,7 @@ def status():
         "last_remark": STATE["last_remark"],
         "focus": dict(focus) if focus else None,
         "streak": reporter.current_streak(conn),
+        "next_quiz_ts": STATE["next_quiz_ts"],
     }
 
 
@@ -110,6 +163,67 @@ def stop_focus():
 @app.post("/api/chat")
 def chat(req: ChatRequest):
     return {"reply": companion.chat(db.connect(), req.message, req.history)}
+
+
+# --- Тренировка памяти (экран-замок) ---
+
+@app.get("/api/quiz")
+def quiz_info():
+    conn = db.connect()
+    week_ago = (datetime.now() - timedelta(days=7)).isoformat(timespec="seconds")
+    attempts = conn.execute(
+        "SELECT result, COUNT(*) AS n FROM quiz_attempts WHERE ts >= ? GROUP BY result",
+        (week_ago,)).fetchall()
+    return {
+        "enabled": db.get_setting(conn, "quiz_enabled") == "1",
+        "mode": db.get_setting(conn, "quiz_mode"),
+        "min_minutes": int(db.get_setting(conn, "quiz_min")),
+        "max_minutes": int(db.get_setting(conn, "quiz_max")),
+        "next_quiz_ts": STATE["next_quiz_ts"],
+        "questions": [dict(q) for q in conn.execute(
+            "SELECT * FROM questions ORDER BY wrong DESC, id").fetchall()],
+        "week_stats": {r["result"]: r["n"] for r in attempts},
+    }
+
+
+@app.post("/api/quiz/settings")
+def quiz_settings(req: QuizSettings):
+    conn = db.connect()
+    db.set_setting(conn, "quiz_enabled", "1" if req.enabled else "0")
+    db.set_setting(conn, "quiz_mode", req.mode if req.mode in ("fixed", "random") else "fixed")
+    db.set_setting(conn, "quiz_min", str(max(1, req.min_minutes)))
+    db.set_setting(conn, "quiz_max", str(max(req.min_minutes, req.max_minutes)))
+    if req.new_password:
+        db.set_setting(conn, "quiz_password_hash",
+                       hashlib.sha256(req.new_password.encode()).hexdigest())
+    if not req.enabled:
+        STATE["next_quiz_ts"] = None
+    return {"ok": True}
+
+
+@app.post("/api/quiz/questions")
+def add_question(req: QuestionRequest):
+    conn = db.connect()
+    conn.execute("INSERT INTO questions (question, answer) VALUES (?, ?)",
+                 (req.question.strip(), req.answer.strip()))
+    conn.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/quiz/questions/{qid}")
+def delete_question(qid: int):
+    conn = db.connect()
+    conn.execute("DELETE FROM questions WHERE id = ?", (qid,))
+    conn.commit()
+    return {"ok": True}
+
+
+@app.post("/api/quiz/launch")
+def launch_quiz():
+    """Кнопка «Проверить сейчас»: открыть экран-замок немедленно."""
+    subprocess.Popen([sys.executable, "-m", "app.lockscreen"],
+                     cwd=config.PROJECT_DIR)
+    return {"ok": True}
 
 
 @app.get("/")

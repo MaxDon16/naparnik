@@ -138,10 +138,11 @@
         <input type="text" id="newA" placeholder="ответ" style="max-width:220px">
         <button onclick="addQuestion()">＋ Добавить</button>
       </div>
+      <div style="margin-top:12px">
+        <span style="color:var(--muted); font-size:13px">Наборы вопросов (включи нужные — они попадут в ротацию):</span>
+        <div class="row" id="packList" style="margin-top:6px"></div>
+      </div>
       <div class="row" style="margin-top:10px; align-items:center">
-        <span style="color:var(--muted); font-size:13px">Готовые наборы:</span>
-        <select id="packSelect"></select>
-        <button onclick="importPack()">📚 Добавить набор</button>
         <label style="margin-left:auto; color:var(--muted); font-size:13px">
           <input type="checkbox" id="overlayOn" onchange="toggleOverlay()"> иконка поверх окон
         </label>
@@ -163,6 +164,7 @@
 const $ = id => document.getElementById(id);
 let history = [];
 let watching = true;
+let packs = [];
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -225,14 +227,21 @@ async function refreshQuiz() {
     `За неделю: верно ${st.correct || 0} · неверно ${st.wrong || 0} · ` +
     `подсмотрено ${st.peeked || 0} (пароль по умолчанию: 1234 — смени его!)` +
     (q.next_quiz_ts ? ` | вопрос в ~${q.next_quiz_ts}` : '');
-  $('packSelect').innerHTML = (q.packs || []).map(p =>
-    `<option value="${p.id}">${esc(p.name)} — ${p.count} вопр.</option>`).join('');
+  packs = q.packs || [];
+  $('packList').innerHTML = packs.map(p =>
+    `<label style="background:var(--card2);border-radius:8px;padding:6px 12px;cursor:pointer">` +
+    `<input type="checkbox" data-pack="${p.id}" ${p.enabled ? 'checked' : ''} ` +
+    `onchange="savePacks()"> ${esc(p.name)} <span style="opacity:.55">(${p.count})</span></label>`
+  ).join('');
   $('overlayOn').checked = !!q.overlay;
+  const packName = id => (packs.find(p => p.id === id) || {name: id}).name;
   $('quizList').innerHTML = q.questions.map(x =>
     `<div><b>${esc(x.question)}</b> → ${esc(x.answer)}` +
-    ` <span style="opacity:.6">(верно ${x.correct}, ошибок ${x.wrong})</span>` +
-    ` <a href="#" style="color:var(--bad)" onclick="delQuestion(${x.id});return false">✕</a></div>`
-  ).join('') || '<span style="color:var(--muted)">вопросов нет — добавь первый!</span>';
+    ` <span style="opacity:.6">(верно ${x.correct}, ошибок ${x.wrong} · ${esc(packName(x.pack))})</span>` +
+    (x.pack === 'custom'
+      ? ` <a href="#" style="color:var(--bad)" onclick="delQuestion(${x.id});return false">✕</a>`
+      : '')
+  ).join('') || '<span style="color:var(--muted)">включи хотя бы один набор или добавь свой вопрос</span>';
 }
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
@@ -260,11 +269,11 @@ async function delQuestion(id) {
   refreshQuiz();
 }
 
-async function importPack() {
-  const id = $('packSelect').value;
-  if (!id) return;
-  const r = await api('/api/quiz/packs/' + id + '/import', {method: 'POST'});
-  alert('Добавлено новых вопросов: ' + r.added);
+async function savePacks() {
+  const enabled = [...document.querySelectorAll('#packList input:checked')]
+    .map(x => x.dataset.pack);
+  await api('/api/quiz/packs', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({enabled})});
   refreshQuiz();
 }
 

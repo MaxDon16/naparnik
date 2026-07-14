@@ -102,7 +102,9 @@ def _overlay_stop() -> None:
 threading.Thread(target=_watch_loop, daemon=True).start()
 threading.Thread(target=_quiz_loop, daemon=True).start()
 tray.start(STATE)
-if db.get_setting(db.connect(), "overlay_enabled") != "0":
+_startup_conn = db.connect()
+db.sync_packs(_startup_conn)             # подтянуть новые наборы из app/packs
+if db.get_setting(_startup_conn, "overlay_enabled") != "0":
     _overlay_start()
 
 
@@ -133,6 +135,10 @@ class QuizSettings(BaseModel):
 class QuestionRequest(BaseModel):
     question: str
     answer: str
+
+
+class PacksRequest(BaseModel):
+    enabled: list[str]
 
 
 @app.get("/api/status")
@@ -195,6 +201,8 @@ def quiz_info():
     attempts = conn.execute(
         "SELECT result, COUNT(*) AS n FROM quiz_attempts WHERE ts >= ? GROUP BY result",
         (week_ago,)).fetchall()
+    enabled_packs = db.enabled_packs(conn)
+    marks = ",".join("?" * len(enabled_packs)) or "''"
     return {
         "enabled": db.get_setting(conn, "quiz_enabled") == "1",
         "mode": db.get_setting(conn, "quiz_mode"),
@@ -202,17 +210,22 @@ def quiz_info():
         "max_minutes": int(db.get_setting(conn, "quiz_max")),
         "next_quiz_ts": STATE["next_quiz_ts"],
         "questions": [dict(q) for q in conn.execute(
-            "SELECT * FROM questions ORDER BY wrong DESC, id").fetchall()],
+            f"SELECT * FROM questions WHERE pack IN ({marks}) "
+            "ORDER BY wrong DESC, id", enabled_packs).fetchall()],
         "week_stats": {r["result"]: r["n"] for r in attempts},
-        "packs": quiz.list_packs(),
+        "packs": quiz.list_packs(conn),
         "overlay": _overlay_running(),
     }
 
 
-@app.post("/api/quiz/packs/{pack_id}/import")
-def import_pack(pack_id: str):
-    added = quiz.import_pack(db.connect(), pack_id)
-    return {"ok": True, "added": added}
+@app.post("/api/quiz/packs")
+def set_packs(req: PacksRequest):
+    """Какие наборы участвуют в ротации вопросов."""
+    conn = db.connect()
+    valid = {p["id"] for p in quiz.list_packs(conn)}
+    chosen = [p for p in req.enabled if p in valid]
+    db.set_setting(conn, "enabled_packs", ",".join(chosen))
+    return {"ok": True, "enabled": chosen}
 
 
 @app.post("/api/overlay")
@@ -241,8 +254,8 @@ def quiz_settings(req: QuizSettings):
 @app.post("/api/quiz/questions")
 def add_question(req: QuestionRequest):
     conn = db.connect()
-    conn.execute("INSERT INTO questions (question, answer) VALUES (?, ?)",
-                 (req.question.strip(), req.answer.strip()))
+    conn.execute("INSERT INTO questions (question, answer, pack) VALUES (?, ?, ?)",
+                 (req.question.strip(), req.answer.strip(), db.CUSTOM_PACK))
     conn.commit()
     return {"ok": True}
 

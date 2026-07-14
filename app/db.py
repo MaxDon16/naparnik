@@ -3,10 +3,15 @@
 Одна таблица observations: каждая строка = "в такой-то момент человек
 делал то-то". Из этих строк потом собирается вся статистика и отчёты.
 """
+import json
 import sqlite3
 from datetime import datetime, date, timedelta
+from pathlib import Path
 
 from . import config
+
+PACKS_DIR = Path(__file__).parent / "packs"
+CUSTOM_PACK = "custom"          # «Мои вопросы» — всё, что добавлено вручную
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS observations (
@@ -68,7 +73,44 @@ DEFAULT_SETTINGS = {
     "quiz_max": "60",
     "quiz_password_hash": "03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4",
     "overlay_enabled": "1",
+    "enabled_packs": CUSTOM_PACK,   # какие наборы участвуют в ротации (через запятую)
 }
+
+
+def load_pack_files() -> list[dict]:
+    """Читает все наборы из app/packs/*.json."""
+    packs = []
+    for f in sorted(PACKS_DIR.glob("*.json")):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            packs.append(data)
+        except Exception:
+            continue        # битый файл не должен ломать всё
+    return packs
+
+
+def sync_packs(conn: sqlite3.Connection) -> None:
+    """Приводит таблицу questions в соответствие с файлами наборов.
+
+    Вопросы наборов помечены своим pack-id и добавляются, если их нет;
+    вручную добавленные («custom») не трогаем никогда.
+    """
+    for pack in load_pack_files():
+        # старые записи без метки (импорт прошлой версии) — прибиваем к набору
+        conn.executemany(
+            "UPDATE questions SET pack = ? WHERE question = ? AND pack = ?",
+            [(pack["id"], q["q"], CUSTOM_PACK) for q in pack["questions"]])
+        existing = {r["question"] for r in conn.execute(
+            "SELECT question FROM questions WHERE pack = ?", (pack["id"],))}
+        conn.executemany(
+            "INSERT INTO questions (question, answer, pack) VALUES (?, ?, ?)",
+            [(q["q"], q["a"], pack["id"]) for q in pack["questions"]
+             if q["q"] not in existing])
+    conn.commit()
+
+
+def enabled_packs(conn: sqlite3.Connection) -> list[str]:
+    return [p for p in get_setting(conn, "enabled_packs").split(",") if p]
 
 
 def connect() -> sqlite3.Connection:
@@ -87,6 +129,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
                      ("apps", "TEXT DEFAULT ''")):
         if col not in cols:
             conn.execute(f"ALTER TABLE observations ADD COLUMN {col} {ddl}")
+
+    qcols = {r[1] for r in conn.execute("PRAGMA table_info(questions)")}
+    if "pack" not in qcols:
+        conn.execute(f"ALTER TABLE questions ADD COLUMN pack TEXT NOT NULL DEFAULT '{CUSTOM_PACK}'")
 
     if conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0] == 0:
         conn.executemany("INSERT INTO questions (question, answer) VALUES (?, ?)",

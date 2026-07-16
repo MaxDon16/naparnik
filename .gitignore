@@ -2,3 +2,7 @@
 __pycache__/
 *.pyc
 report_build/node_modules/
+
+lessons/
+report_build/
+*.docx
